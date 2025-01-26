@@ -2,16 +2,89 @@ import pandas as pd
 import numpy as np
 from abc import ABC, abstractmethod
 from orderClass import orders
+from orderBookClass import OBData
+from debug import logger
 
 class trading_strat(ABC):
     def __init__(self, strat_name):
         self.strat = strat_name
         self.historical_trade = []
+        self.historical_inventory = []
         self.historical_pnl = []
+        self.historical_unrealPnL = []
+        self.PnL = 0
+        self.unrealPnL = 0
         self.inventory = {"price" : 0 , "quantity" : 0}
         self.__class__.order_out = {}
         self.__class__.orderID = 0
 
+    def computePnL(self, orderID):
+
+        avgPrice = self.inventory["price"]
+
+        if self.inventory["quantity"] > 0:
+            # Compute of last filled order negative
+            order = self.order_out[orderID]
+            if order[orders.orderIndex["quantity"]] < 0 : 
+                if (
+                    (np.sign(self.inventory["quantity"]+order[orders.orderIndex["quantity"]]) == np.sign(self.inventory["quantity"]))
+                    or
+                    (np.sign(self.inventory["quantity"]+order[orders.orderIndex["quantity"]]) == 0)
+                    
+                    ):
+                    logger.info(f'order price : {order[orders.orderIndex["price"]]} - inventPrice : {avgPrice} - order qty: {order[orders.orderIndex["quantity"]]}')
+                    self.PnL += (avgPrice-order[orders.orderIndex["price"]])*order[orders.orderIndex["quantity"]]
+                    logger.info(f'PnL Generated: {self.PnL}')
+                else: 
+                    self.PnL += (avgPrice-order[orders.orderIndex["price"]])*(self.inventory["quantity"])
+
+        elif self.inventory["quantity"] < 0:
+            # Compute if last filled order positive
+            order = self.order_out[orderID]
+            if order[orders.orderIndex["quantity"]] > 0 : 
+                if (
+                    (np.sign(self.inventory["quantity"]+order[orders.orderIndex["quantity"]]) == np.sign(self.inventory["quantity"]))
+                    or
+                    (np.sign(self.inventory["quantity"]+order[orders.orderIndex["quantity"]]) == 0)
+                    
+                    ):
+                    logger.info(f'order price : {order[orders.orderIndex["price"]]} - inventPrice : {avgPrice} - order qty: {order[orders.orderIndex["quantity"]]}')
+                    self.PnL += (avgPrice-order[orders.orderIndex["price"]])*order[orders.orderIndex["quantity"]]
+                    logger.info(f'PnL Generated: {self.PnL}')
+                else: 
+                    self.PnL += (avgPrice-order[orders.orderIndex["price"]])*(self.inventory["quantity"])
+
+
+        return 
+
+    def computeUnrealPnL(self):
+        """
+        Compute unrealized PnL - with only one asset available for now
+        """
+        avgPrice = self.inventory["price"]
+        quantity = self.inventory["quantity"]
+        
+        self.unrealPnL = (avgPrice-OBData.mid())*-quantity
+
+        if len(self.historical_pnl)>0:
+            self.unrealPnL += self.historical_pnl[-1]
+
+        return 
+    
+    def updateInventory(self, orderPrice: int, orderQuantity: int):
+
+        if self.inventory["quantity"] == 0:
+            self.inventory["price"] = orderPrice
+        elif np.sign(self.inventory["quantity"] + orderQuantity) != np.sign(self.inventory["quantity"]):
+            self.inventory["price"] = orderPrice
+        elif np.sign(self.inventory["quantity"]) != np.sign(orderQuantity):
+            pass
+        elif np.sign(self.inventory["quantity"]) == np.sign(orderQuantity):
+            self.inventory["price"] = (self.inventory["price"]*self.inventory["quantity"] 
+                                                + orderPrice*orderQuantity) / (orderQuantity+self.inventory["quantity"]) 
+            
+        self.inventory["quantity"] += orderQuantity
+    
     @abstractmethod
     def strategy():
         return
@@ -24,64 +97,31 @@ class basicStrat(trading_strat):
 
     def strategy(self, orderClass):
 
-        targetBuy = 59800
+        targetBuy = 59000
         targetSell = 60000
 
         
-        if orderClass.bids>=targetBuy:
-            if self.inventory["quantity"] <= 10:
-                price, quantity, status = orderClass.bids+1, -1, 0
-                orderClass.send_order(self, price, -quantity)
-                self.inventory["quantity"] += -quantity
+        if OBData.mid()<=targetBuy:
+            # Best ask below Buy Target -> I buy
+            if  self.inventory["quantity"] <= 5:
+                price, quantity = targetBuy, 1
+                orderClass.send_order(self, price, quantity)
                 self.orderID +=1
-        elif orderClass.asks<=targetSell:
-            if self.inventory["quantity"] >= -10:
-                price, quantity, status = orderClass.asks-1, 1, 0
-                orderClass.send_order(self, price, -quantity)
-                self.inventory["quantity"] += -quantity
+            else:
+                orderToCancel = list(self.order_out.keys())
+                for id in orderToCancel:
+                    orderClass.cancel_order(self, id)
+
+        elif OBData.mid()>=targetSell:
+            # Mid above Sell Target -> I sell
+            if self.inventory["quantity"] >= -5:
+                price, quantity = targetSell, -1
+                orderClass.send_order(self, price, quantity)
                 self.orderID +=1
+            else:
+                orderToCancel = list(self.order_out.keys())
+                for id in orderToCancel:
+                    orderClass.cancel_order(self, id)
         
-        orderClass.filled_order(self)
-
-class MovingAverageStrat(trading_strat):
-    def __init__(self, name, short_window, long_window):
-        super().__init__(name)
-        self.short_window = short_window  # Number of periods for the short moving average
-        self.long_window = long_window    # Number of periods for the long moving average
-        self.prices = []                  # Store historical prices to calculate moving averages
-
-    def calculate_moving_averages(self):
-        # Ensure there are enough prices to calculate the moving averages
-        if len(self.prices) >= self.long_window:
-            short_ma = np.mean(self.prices[-self.short_window:])
-            long_ma = np.mean(self.prices[-self.long_window:])
-            return short_ma, long_ma
-        return None, None
-
-    def strategy(self, orderClass):
-        # Append the latest market price to the price history
-        current_price = orderClass.mid_price  # Assuming `orderClass` provides the mid-price
-        self.prices.append(current_price)
-
-        # Ensure we have enough data to calculate moving averages
-        short_ma, long_ma = self.calculate_moving_averages()
-        if short_ma is None or long_ma is None:
-            return  # Not enough data yet
-
-        # Implement Dual Moving Average Crossover Strategy
-        if short_ma > long_ma:  # Golden Cross (Buy Signal)
-            if self.inventory["quantity"] <= 0:  # Ensure no long position already exists
-                price, quantity = current_price + 1, 1  # Buy one unit at slightly higher price
-                orderClass.send_order(self, price, quantity)
-                self.inventory["quantity"] += quantity
-                self.orderID += 1
-        elif short_ma < long_ma:  # Death Cross (Sell Signal)
-            if self.inventory["quantity"] > 0:  # Ensure no short position already exists
-                price, quantity = current_price - 1, -1  # Sell one unit at slightly lower price
-                orderClass.send_order(self, price, quantity)
-                self.inventory["quantity"] += quantity
-                self.orderID += 1
-
-        # Update filled orders
-        orderClass.filled_order(self)
-
+        orderClass.filled_order(self) 
+        
