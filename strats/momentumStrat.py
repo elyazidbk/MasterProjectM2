@@ -1,8 +1,8 @@
 import pandas as pd
 import numpy as np
-from orderClass import orders
-from orderBookClass import OBData
-from tradingStratClass import trading_strat
+from backtesterClass.orderClass import orders
+from backtesterClass.orderBookClass import OBData
+from backtesterClass.tradingStratClass import trading_strat
 from debug import logger
 
 
