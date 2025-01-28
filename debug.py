@@ -1,5 +1,5 @@
 import logging
-from orderBookClass import OBData
+from backtesterClass.orderBookClass import OBData
 
 def get_step():
     return OBData.step

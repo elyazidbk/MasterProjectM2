@@ -32,9 +32,9 @@ class trading_strat(ABC):
                     (np.sign(self.inventory["quantity"]+order[orders.orderIndex["quantity"]]) == 0)
                     
                     ):
-                    logger.info(f'order price : {order[orders.orderIndex["price"]]} - inventPrice : {avgPrice} - order qty: {order[orders.orderIndex["quantity"]]}')
+                    # logger.info(f'order price : {order[orders.orderIndex["price"]]} - inventPrice : {avgPrice} - order qty: {order[orders.orderIndex["quantity"]]}')
                     self.PnL += (avgPrice-order[orders.orderIndex["price"]])*order[orders.orderIndex["quantity"]]
-                    logger.info(f'PnL Generated: {self.PnL}')
+                    # logger.info(f'PnL Generated: {self.PnL}')
                 else: 
                     self.PnL += (avgPrice-order[orders.orderIndex["price"]])*(self.inventory["quantity"])
 
@@ -48,9 +48,9 @@ class trading_strat(ABC):
                     (np.sign(self.inventory["quantity"]+order[orders.orderIndex["quantity"]]) == 0)
                     
                     ):
-                    logger.info(f'order price : {order[orders.orderIndex["price"]]} - inventPrice : {avgPrice} - order qty: {order[orders.orderIndex["quantity"]]}')
+                    # logger.info(f'order price : {order[orders.orderIndex["price"]]} - inventPrice : {avgPrice} - order qty: {order[orders.orderIndex["quantity"]]}')
                     self.PnL += (avgPrice-order[orders.orderIndex["price"]])*order[orders.orderIndex["quantity"]]
-                    logger.info(f'PnL Generated: {self.PnL}')
+                    # logger.info(f'PnL Generated: {self.PnL}')
                 else: 
                     self.PnL += (avgPrice-order[orders.orderIndex["price"]])*(self.inventory["quantity"])
 

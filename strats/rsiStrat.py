@@ -6,41 +6,27 @@ from backtesterClass.orderBookClass import OBData
 from backtesterClass.tradingStratClass import trading_strat
 from debug import logger
 
-
 MAX_INVENT = 5
 
-class momentumStrat(trading_strat):
+class rsiStrat(trading_strat):
     
-    def __init__(self, name,
-                short_window: int, long_window: int,
-                RSI_window=1000, sellThreshold=70,
-                buyThreshold=40, alpha=2):
-        
+    def __init__(self, name, window=1000, sellThreshold=70, buyThreshold=40, alpha=0.002):
         super().__init__(name)
         self.name = name
-
-        self.RSIWindow = RSI_window 
-        self.short_window = short_window
-        self.long_window = long_window
-        self.maxLen = max(self.RSIWindow,self.long_window)
-        
-        self.prices = deque(maxlen=self.maxLen) # Store prices only up to the max window necessary
-
+        self.windowLengt = window
+        self.windowRSI = deque(maxlen=window)
         self.sellThreshold = sellThreshold
         self.buyThreshold = buyThreshold
-        self.alpha = alpha/self.RSIWindow # Smoothing factor
-
-        self.short_sum = 0
-        self.long_sum = 0        
-        
+        self.alpha = alpha  # Smoothing factor
         self.historical_RSI = []
-        self.historical_short_ma = []
-        self.historical_long_ma = []
 
+    
     def compute_RSI(self):
 
-        if len(self.prices) > 1:
-            delta = self.prices[-1] - self.prices[-2]
+        self.windowRSI.append(OBData.mid())
+
+        if len(self.windowRSI) > 1:
+            delta = self.windowRSI[-1] - self.windowRSI[-2]
         else:
             delta = 0  # No change for the first element
 
@@ -66,61 +52,19 @@ class momentumStrat(trading_strat):
             rsi = 100 - (100 / (1 + rs))
 
     
-        if len(self.prices) < self.RSIWindow:
+        if len(self.windowRSI) < self.windowLengt:
             self.historical_RSI.append(None)
             return None
         else:
             self.historical_RSI.append(rsi)
             return rsi
 
-
-    def calculate_moving_averages(self, newPrice):
-
-        if len(self.prices) >= self.short_window:
-            
-            if len(self.prices) == self.short_window:
-                self.short_sum += newPrice - self.prices[0]
-            else:
-                self.short_sum += newPrice - self.prices[-self.short_window]
-
-            if len(self.prices) >= self.long_window:
-                if self.long_sum == self.maxLen:
-                    self.long_sum += newPrice - self.prices[0] 
-                else:
-                    self.long_sum += newPrice - self.prices[-self.long_window] 
-
-                # Calculate the moving averages
-                short_ma = self.short_sum / self.short_window
-                long_ma = self.long_sum / self.long_window
-    
-                # Append to historical data
-                self.historical_short_ma.append(short_ma)
-                self.historical_long_ma.append(long_ma)
-
-                return short_ma, long_ma
-            
-            else:
-                self.long_sum += newPrice
-                self.historical_long_ma.append(None)
-                self.historical_short_ma.append(None)
-                return None, None
-            
-        else:
-            self.short_sum += newPrice
-            self.long_sum += newPrice
-            self.historical_long_ma.append(None)
-            self.historical_short_ma.append(None)
-            return None, None
-    
     def strategy(self, orderClass):
 
-        newPrice = OBData.mid()
-        self.prices.append(newPrice)
-
         rsi = self.compute_RSI()
-        short_ma, long_ma = self.calculate_moving_averages(newPrice)
+        current_price = OBData.mid()
 
-        if rsi is None or short_ma is None or long_ma is None:
+        if rsi is None:
             pass
         
         else:
@@ -133,8 +77,8 @@ class momentumStrat(trading_strat):
         
             # Implement Dual Moving Average Crossover Strategy
             if self.inventory["quantity"]+len(buyOrderOut) <= MAX_INVENT:  # Ensure no long position above 6
-                if (rsi <= self.buyThreshold) and (short_ma > long_ma):  # Buy Signal
-                    price, quantity = newPrice, 1  # Buy one unit at slightly higher price
+                if rsi <= self.buyThreshold:  # Buy Signal
+                    price, quantity = current_price, 1  # Buy one unit at slightly higher price
                     orderClass.send_order(self, price, quantity)
                     self.orderID += 1
             else:
@@ -145,8 +89,8 @@ class momentumStrat(trading_strat):
                         orderClass.cancel_order(self, id)
             
             if self.inventory["quantity"]-len(sellOrderOut) >= -MAX_INVENT:  # Ensure no short position below 6
-                if (rsi >= self.sellThreshold) and (short_ma < long_ma):  # Sell Signal
-                    price, quantity = newPrice, -1  # Sell one unit at slightly lower price
+                if rsi >= self.sellThreshold:  # Sell Signal
+                    price, quantity = current_price, -1  # Sell one unit at slightly lower price
                     orderClass.send_order(self, price, quantity)
                     self.orderID += 1
 
@@ -161,4 +105,3 @@ class momentumStrat(trading_strat):
 
         # Update filled orders
         orderClass.filled_order(self)
-

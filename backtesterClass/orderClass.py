@@ -71,7 +71,8 @@ class orders:
             tradeCancelled[self.orderIndex["endTime"]] = self.time
             trading_strat.historical_trade.append(tradeCancelled)
         
-        trading_strat.order_out.pop(orderID) 
+        trading_strat.order_out.pop(orderID)
+        # logger.info(f"order {orderID} cancelled - orders out : {trading_strat.order_out}")
 
     @classmethod
     def filled_order(self, trading_strat):
