@@ -55,3 +55,4 @@ class SqlAlchemyDataBaseManager(LocalDataManager):
         Shows db local path
         """
         return self.db_url
+    

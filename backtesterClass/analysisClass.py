@@ -15,6 +15,7 @@ from strats.basicStrat import basicStrat
 from strats.movingAverageStrat import movingAverageStrat
 from strats.rsiStrat import rsiStrat
 from strats.momentumStrat import momentumStrat
+from strats.momentumOnlineLearn import momentumOnlineLearnStrat
 
 from SQLite_Manager.sqlManager import SqlAlchemyDataBaseManager
 
@@ -36,15 +37,19 @@ class analysisClass:
         self.historicalTrades["sendTime"] = pd.to_datetime(self.historicalTrades["sendTime"], unit='ms')
         self.historicalTrades["endTime"] = pd.to_datetime(self.historicalTrades["endTime"], unit='ms')
 
-        self.historicalInventory = pd.DataFrame({"time":self.time,"inventory":self.autoTrader.historical_inventory})
-        self.historicalPnL = pd.DataFrame({"time":self.time,"Pnl":self.autoTrader.historical_pnl})
-        self.historicalUnrealizedPnL = pd.DataFrame({"time":self.time,"unrealPnl":self.autoTrader.historical_unrealPnL})
+        self.data = pd.DataFrame({"time":self.time,
+                                  "mids":self.mid,
+                                  "inventory":self.autoTrader.historical_inventory,
+                                  "Pnl":self.autoTrader.historical_pnl,
+                                  "unrealPnl":self.autoTrader.historical_unrealPnL})
 
-        self.df_mid = pd.DataFrame({"time":self.time, "mids":self.mid})
+        self.historicalTrades = pd.DataFrame(self.autoTrader.historical_trade, columns=["idx", "sendTime", "price", "quantity", "endTime", "status"])
+        self.historicalTrades["sendTime"] = pd.to_datetime(self.historicalTrades["sendTime"], unit='ms')
+        self.historicalTrades["endTime"] = pd.to_datetime(self.historicalTrades["endTime"], unit='ms')
+    
+    def create_dashboard(self, save = True, show = False, streamlit=False):
 
-    def create_dashboard(self, save = True, show = False):
-
-        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
             # Intermediary dashboard to display rsi chart
             fig = make_subplots(specs=[[{"secondary_y": True}], [{}], [{}]], 
                                 rows=3, cols=1,
@@ -63,24 +68,24 @@ class analysisClass:
         
 
         fig.add_trace(go.Scatter(
-                            x=self.df_mid.time,
-                            y=self.df_mid.mids,
+                            x=self.data.time,
+                            y=self.data.mids,
                             name="mid price",
                             marker=dict(color='darkgray')
                                 )
                         ,row=1, col=1, secondary_y=False)
     
         fig.add_trace(go.Scatter(
-                        x=self.historicalPnL.time,
-                        y=self.historicalPnL.Pnl,
+                        x=self.data.time,
+                        y=self.data.Pnl,
                         name="pnl",
                         marker=dict(color='red')
                             )
                     ,row=1, col=1, secondary_y=True)
 
         fig.add_trace(go.Scatter(
-                        x=self.historicalUnrealizedPnL.time,
-                        y=self.historicalUnrealizedPnL.unrealPnl,
+                        x=self.data.time,
+                        y=self.data.unrealPnl,
                         name="UnrealPnl",
                         marker=dict(color='deepskyblue')
                             )
@@ -162,24 +167,24 @@ class analysisClass:
             col=1
         )
 
-        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
             fig.add_trace(go.Scatter(
-                                x=self.historicalInventory.time,
-                                y=self.historicalInventory.inventory,
+                                x=self.data.time,
+                                y=self.data.inventory,
                                 name="inventory",
                                 marker=dict(color='darkgray')
                                     )
                             ,row=3, col=1)
         else:
             fig.add_trace(go.Scatter(
-                                x=self.historicalInventory.time,
-                                y=self.historicalInventory.inventory,
+                                x=self.data.time,
+                                y=self.data.inventory,
                                 name="inventory",
                                 marker=dict(color='darkgray')
                                     )
                             ,row=2, col=1)           
 
-        if isinstance(self.autoTrader, movingAverageStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, movingAverageStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
 
             fig.add_trace(go.Scatter(
                                 x=self.time,
@@ -197,13 +202,13 @@ class analysisClass:
                                     )
                             ,row=1, col=1, secondary_y=False)
             
-        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
 
             fig.add_trace(go.Scatter(
                                 x=self.time,
                                 y=self.autoTrader.historical_RSI,
                                 name="rsi",
-                                marker=dict(color='seagreen')
+                                marker=dict(color='darkgray')
                                     )
                             ,row=2, col=1, secondary_y=False)
 
@@ -247,7 +252,7 @@ class analysisClass:
                     yanchor="top"  # Anchor it to the top of the legend box
                 ))
         
-        if not isinstance(self.autoTrader, rsiStrat) and not isinstance(self.autoTrader, momentumStrat):
+        if not isinstance(self.autoTrader, rsiStrat) and not isinstance(self.autoTrader, momentumStrat) and not isinstance(self.autoTrader, momentumOnlineLearnStrat) :
 
             fig.update_layout(
                 legend_orientation="h",
@@ -283,11 +288,14 @@ class analysisClass:
             else:
                 fig.write_html(f"{self.path}/{self.dashboardName}.html")
         
-        return fig
+        if streamlit:
+            return fig
+        
+        return
     
     @classmethod
     def streamlitDashboard(self, fig):
-        st.plotly_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
         return 
 
 
@@ -298,18 +306,25 @@ class analysisClass:
         else:
             db = SqlAlchemyDataBaseManager(f"{self.path}/{self.dbName}.db")
 
+
+        historicalInventory = self.data[["time", "inventory"]]
+        historicalPnL = self.data[["time", "PnL"]]
+        historicalUnrealizedPnL = self.data[["time", "unrealPnl"]]
+        df_mid = self.data[["time", "mids"]]
+
+        db.update("historicalPrices",df_mid)
         db.update("historicalTrades",self.historicalTrades)
-        db.update("historicalInventory",self.historicalInventory)
-        db.update("historicalPnL",self.historicalPnL)
-        db.update("historicalUnrealizedPnL",self.historicalUnrealizedPnL)
+        db.update("historicalInventory",historicalInventory)
+        db.update("historicalPnL",historicalPnL)
+        db.update("historicalUnrealizedPnL",historicalUnrealizedPnL)
 
         if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
-            self.historicalRSI = pd.DataFrame({"time":self.time,"RSI":self.autoTrader.historical_RSI})
-            db.update("historicalRSI", self.historicalRSI)
+            historicalRSI = pd.DataFrame({"time":self.time,"RSI":self.autoTrader.historical_RSI})
+            db.update("historicalRSI", historicalRSI)
         
         elif isinstance(self.autoTrader, movingAverageStrat) or isinstance(self.autoTrader, momentumStrat):
-            self.historicalMA = pd.DataFrame({"time":self.time,
-                                              "long_ma":self.autoTrader.historical_long_ma,
-                                              "short_ma":self.autoTrader.historical_short_ma})
+            historicalMA = pd.DataFrame({"time":self.time,
+                                         "long_ma":self.autoTrader.historical_long_ma,
+                                         "short_ma":self.autoTrader.historical_short_ma})
             
-            db.update("historicalMA", self.historicalMA)
+            db.update("historicalMA", historicalMA)

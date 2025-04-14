@@ -14,7 +14,7 @@ class momentumStrat(trading_strat):
     def __init__(self, name,
                 short_window: int, long_window: int,
                 RSI_window=1000, sellThreshold=70,
-                buyThreshold=30, alpha=2):
+                buyThreshold=40, alpha=2):
         
         super().__init__(name)
         self.name = name
@@ -114,49 +114,51 @@ class momentumStrat(trading_strat):
     
     def strategy(self, orderClass):
 
-        newPrice = OBData.mid()
-        self.prices.append(newPrice)
+        for asset in OBData.assets:
 
-        rsi = self.compute_RSI()
-        short_ma, long_ma = self.calculate_moving_averages(newPrice)
+            newPrice = OBData.mid(asset)
+            self.prices.append(newPrice)
 
-        if rsi is None or short_ma is None or long_ma is None:
-            pass
-        
-        else:
+            rsi = self.compute_RSI()
+            short_ma, long_ma = self.calculate_moving_averages(newPrice)
 
-            buyOrderOut = [id for id, trade in self.order_out.items() 
-                        if trade[orders.orderIndex["quantity"]] > 0]
-
-            sellOrderOut = [id for id, trade in self.order_out.items() 
-                        if trade[orders.orderIndex["quantity"]] < 0]
-        
-            # Implement Dual Moving Average Crossover Strategy
-            if self.inventory["quantity"]+len(buyOrderOut) <= MAX_INVENT:  # Ensure no long position above 6
-                if (rsi <= self.buyThreshold) and (short_ma > long_ma):  # Buy Signal
-                    price, quantity = newPrice, 1  # Buy one unit at slightly higher price
-                    orderClass.send_order(self, price, quantity)
-                    self.orderID += 1
-            else:
-                buyOrderToCancel = buyOrderOut[:MAX_INVENT-(self.inventory["quantity"]+len(buyOrderOut))]
-
-                if len(buyOrderToCancel) > 0:
-                    for id in buyOrderToCancel:
-                        orderClass.cancel_order(self, id)
+            if rsi is None or short_ma is None or long_ma is None:
+                pass
             
-            if self.inventory["quantity"]-len(sellOrderOut) >= -MAX_INVENT:  # Ensure no short position below 6
-                if (rsi >= self.sellThreshold) and (short_ma < long_ma):  # Sell Signal
-                    price, quantity = newPrice, -1  # Sell one unit at slightly lower price
-                    orderClass.send_order(self, price, quantity)
-                    self.orderID += 1
-
-
             else:
-                sellOrderToCancel = sellOrderOut[:MAX_INVENT-(-self.inventory["quantity"]+len(sellOrderOut))]
 
-                if len(sellOrderToCancel) >0:
-                    for id in sellOrderToCancel:
-                        orderClass.cancel_order(self, id)
+                buyOrderOut = [id for id, trade in self.order_out.items() 
+                            if trade[orders.orderIndex["quantity"]] > 0]
+
+                sellOrderOut = [id for id, trade in self.order_out.items() 
+                            if trade[orders.orderIndex["quantity"]] < 0]
+            
+                # Implement Dual Moving Average Crossover Strategy
+                if self.inventory["quantity"]+len(buyOrderOut) <= MAX_INVENT:  # Ensure no long position above 6
+                    if (short_ma > long_ma):  # Buy Signal
+                        price, quantity = newPrice, 1  # Buy one unit at slightly higher price
+                        orderClass.send_order(self, price, quantity)
+                        self.orderID += 1
+                else:
+                    buyOrderToCancel = buyOrderOut[:MAX_INVENT-(self.inventory["quantity"]+len(buyOrderOut))]
+
+                    if len(buyOrderToCancel) > 0:
+                        for id in buyOrderToCancel:
+                            orderClass.cancel_order(self, id)
+                
+                if self.inventory["quantity"]-len(sellOrderOut) >= -MAX_INVENT:  # Ensure no short position below 6
+                    if (short_ma < long_ma):  # Sell Signal
+                        price, quantity = newPrice, -1  # Sell one unit at slightly lower price
+                        orderClass.send_order(self, price, quantity)
+                        self.orderID += 1
+
+
+                else:
+                    sellOrderToCancel = sellOrderOut[:MAX_INVENT-(-self.inventory["quantity"]+len(sellOrderOut))]
+
+                    if len(sellOrderToCancel) >0:
+                        for id in sellOrderToCancel:
+                            orderClass.cancel_order(self, id)
 
 
         # Update filled orders
