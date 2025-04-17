@@ -70,7 +70,14 @@ class OHLCVBacktester:
                 date = row.name if self.data.index.name else idx
 
                 if signal == 1 and state['position'] == 0:
-                    quantity = int(state['cash'] // (price * (1 + self.fee_perc)))
+                    max_invest = state['cash']
+                    cash_quantity = int(max_invest // (price * (1 + self.fee_perc)))
+                    volume_col = f'{symbol}_Volume'
+                    if volume_col in row and not pd.isna(row[volume_col]):
+                        max_volume = int(row[volume_col] * 0.1)
+                    else:
+                        max_volume = float('inf')  # If volume is missing, only cash constraint applies
+                    quantity = min(cash_quantity, max_volume)
                     if quantity > 0:
                         fee = price * self.fee_perc * quantity
                         state['trades'].append(OHLCVOrder(date, price, quantity, 'buy', fee, indicator))

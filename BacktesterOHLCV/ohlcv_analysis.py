@@ -165,17 +165,48 @@ class OHLCVAnalysis:
         print(f"  Max Drawdown: {metrics['max_drawdown']:.2%}")
         print(f"  Total Return: {metrics['return']:.2%}")
 
-    def plot_portfolio_cash_cap(self):
-        """Plot the theoretical maximum available cash per asset (initial cash per asset, grows with portfolio PnL)."""
+    def plot_average_position_size(self):
+        """Plot the average position size per asset over time."""
         n = len(self.portfolio_equity_curve)
         n_assets = len(self.asset_states)
-        # Theoretical cap per asset at each time: total portfolio value / n_assets
-        portfolio_value = np.array(self.portfolio_equity_curve)
-        cash_cap_per_asset = portfolio_value / n_assets
+        # Collect all positions per asset (pad with zeros if needed)
+        positions_matrix = []
+        for state in self.asset_states.values():
+            pos = np.array(state['positions'])
+            if len(pos) < n:
+                pos = np.pad(pos, (0, n - len(pos)), 'constant')
+            positions_matrix.append(pos)
+        positions_matrix = np.array(positions_matrix)
+        avg_position = positions_matrix.mean(axis=0)
+        import plotly.graph_objects as go
         fig = go.Figure()
-        fig.add_trace(go.Scatter(x=self.data.index, y=cash_cap_per_asset, mode='lines', name='Cash Cap per Asset'))
-        fig.update_layout(title='Theoretical Cash Cap per Asset Over Time', xaxis_title='Date', yaxis_title='Cash Cap per Asset')
+        fig.add_trace(go.Scatter(x=self.data.index[:n], y=avg_position, mode='lines', name='Average Position Size'))
+        fig.update_layout(title='Average Position Size per Asset Over Time', xaxis_title='Date', yaxis_title='Average Position Size')
         fig.show()
+
+    def plot_average_position_size(self):
+        """Plot the average position size in cash per asset over time."""
+        n = len(self.portfolio_equity_curve)
+        positions_matrix = []
+        for symbol, state in self.asset_states.items():
+            pos = np.array(state['positions'])
+            price_col = f"{symbol}_Close"
+            if price_col in self.data.columns:
+                prices = self.data[price_col].values
+                if len(pos) < n:
+                    pos = np.pad(pos, (0, n - len(pos)), 'constant')
+                if len(prices) < n:
+                    prices = np.pad(prices, (0, n - len(prices)), 'edge')
+                pos_cash = pos * prices[:n]
+                positions_matrix.append(pos_cash)
+        if positions_matrix:
+            positions_matrix = np.array(positions_matrix)
+            avg_position_cash = positions_matrix.mean(axis=0)
+            import plotly.graph_objects as go
+            fig = go.Figure()
+            fig.add_trace(go.Scatter(x=self.data.index[:n], y=avg_position_cash, mode='lines', name='Average Position Size (Cash)'))
+            fig.update_layout(title='Average Position Size in Cash per Asset Over Time', xaxis_title='Date', yaxis_title='Average Position Size (Cash)')
+            fig.show()
 
     def plot_asset_pnl_with_trades(self, symbol):
         import plotly.graph_objects as go
