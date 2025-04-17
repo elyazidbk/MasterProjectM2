@@ -1,3 +1,4 @@
+import re
 import numpy as np
 import pandas as pd
 from ohlcv_order import OHLCVOrder
@@ -13,57 +14,93 @@ class OHLCVBacktester:
         self.returns = []
 
     def run(self, initial_cash=1_000_000):
-        self.strategy.reset()
-        signals, indicators = self.strategy.generate_signals(self.data)  # Get signals and indicators
-        position = 0
-        cash = initial_cash
-        equity = [initial_cash]  # Start with initial cash
-        realized_pnl = []  # Track realized PnL
-        unrealized_pnl = []  # Track unrealized PnL
-        cumulative_realized_pnl = 0  # Track cumulative realized PnL
-        positions = []  # Track position size over time
-        equity_allocation = []  # Track equity allocation over time
-        cash_allocation = []  # Track cash allocation over time
-        for i, row in self.data.iterrows():
-            signal = signals[i]
-            indicator = indicators[i]  # Get the indicator value for this step
-            price = row['Close']
-            date = row[self.data.columns[0]]
+        # Identify asset symbols from columns (e.g., AAPL_Close, MSFT_Close)
+        asset_symbols = sorted(list(set([col.split('_')[0] for col in self.data.columns if col.endswith('_Close')])))
+        n_assets = len(asset_symbols)
+        cash_per_asset = initial_cash / n_assets
 
-            if signal == 1 and position == 0:  # Buy all in
-                quantity = int(cash // (price * (1 + self.fee_perc)))  # Account for fees
-                fee = price * self.fee_perc * quantity
-                self.trades.append(OHLCVOrder(date, price, quantity, 'buy', fee, indicator))
-                position += quantity
-                cash -= (price * quantity) + fee
-                realized_pnl.append(cumulative_realized_pnl)  # No realized PnL on buy
-                print(f"Step {i}, Date {date}: Trade Executed: BUY {quantity} units at {price}, Indicator={indicator}, Cash={cash}, Position={position}, Equity={cash + position * price}, Realized PnL={realized_pnl[-1]}")
-            elif signal == -1 and position > 0:  # Sell all
-                fee = price * self.fee_perc * position
-                self.trades.append(OHLCVOrder(date, price, position, 'sell', fee, indicator))
-                trade_pnl = (price * position) - (self.trades[-2].price * position) - fee
-                cumulative_realized_pnl += trade_pnl
-                realized_pnl.append(cumulative_realized_pnl)  # Realized PnL from the trade
-                cash += (price * position) - fee
-                print(f"Step {i}, Date {date}: Trade Executed: SELL {position} units at {price}, Indicator={indicator}, Cash={cash}, Position=0, Equity={cash}, Trade PnL={trade_pnl}, Realized PnL={realized_pnl[-1]}")
-                position = 0
-            else:
-                realized_pnl.append(cumulative_realized_pnl)  # No realized PnL if no trade
+        # Initialize per-asset state
+        asset_states = {
+            symbol: {
+                'cash': cash_per_asset,
+                'position': 0,
+                'trades': [],
+                'equity': [cash_per_asset],
+                'realized_pnl': [],
+                'unrealized_pnl': [],
+                'cumulative_realized_pnl': 0,
+                'positions': [],
+                'equity_allocation': [],
+                'cash_allocation': []
+            } for symbol in asset_symbols
+        }
 
-            positions.append(position)  # Track the current position size
-            unrealized_pnl.append(position * price)  # Unrealized PnL based on current position
-            equity.append(cash + position * price)
+        # Prepare per-asset signals/indicators
+        asset_signals = {}
+        asset_indicators = {}
+        for symbol in asset_symbols:
+            # Extract per-asset DataFrame
+            cols = [c for c in self.data.columns if c.startswith(symbol+'_')]
+            asset_df = self.data[cols].copy()
+            asset_df.columns = [c.replace(symbol+'_', '') for c in cols]
+            asset_df = asset_df.reset_index(drop=True)
+            # Generate signals/indicators for this asset
+            sig, ind = self.strategy.generate_signals(asset_df)
+            asset_signals[symbol] = sig
+            asset_indicators[symbol] = ind
 
-            # Track allocations
-            cash_allocation.append(cash)
-            equity_allocation.append(position * price)
+        # Main backtest loop
+        for idx, (i, row) in enumerate(self.data.iterrows()):
+            total_equity = 0
+            for symbol in asset_symbols:
+                state = asset_states[symbol]
+                # Use Adjusted Close if available, otherwise fallback to Close
+                price_col = f'{symbol}_Adj Close' if f'{symbol}_Adj Close' in self.data.columns else f'{symbol}_Close'
+                if price_col not in row or pd.isna(row[price_col]):
+                    state['realized_pnl'].append(state['cumulative_realized_pnl'])
+                    state['positions'].append(state['position'])
+                    state['unrealized_pnl'].append(state['position'] * 0)
+                    state['equity'].append(state['cash'])
+                    state['cash_allocation'].append(state['cash'])
+                    state['equity_allocation'].append(0)
+                    continue
+                price = row[price_col]
+                signal = asset_signals[symbol][idx]
+                indicator = asset_indicators[symbol][idx]
+                date = row.name if self.data.index.name else idx
 
-        self.equity_curve = equity
-        self.realized_pnl = realized_pnl
-        self.unrealized_pnl = unrealized_pnl
-        self.positions = positions  # Store positions in the backtester
-        self.cash_allocation = cash_allocation  # Store cash allocation
-        self.equity_allocation = equity_allocation  # Store equity allocation
-        self.returns = pd.Series(equity).pct_change().fillna(0)
-        logger.info(f"Backtest complete. Trades: {len(self.trades)}")
-        return self.trades, self.equity_curve, self.unrealized_pnl, self.realized_pnl, self.positions, self.cash_allocation, self.equity_allocation
+                if signal == 1 and state['position'] == 0:
+                    quantity = int(state['cash'] // (price * (1 + self.fee_perc)))
+                    if quantity > 0:
+                        fee = price * self.fee_perc * quantity
+                        state['trades'].append(OHLCVOrder(date, price, quantity, 'buy', fee, indicator))
+                        state['position'] += quantity
+                        state['cash'] -= (price * quantity) + fee
+                    state['realized_pnl'].append(state['cumulative_realized_pnl'])
+                elif signal == -1 and state['position'] > 0:
+                    fee = price * self.fee_perc * state['position']
+                    state['trades'].append(OHLCVOrder(date, price, state['position'], 'sell', fee, indicator))
+                    last_buy_price = state['trades'][-2].price if len(state['trades']) >= 2 else price
+                    trade_pnl = (price * state['position']) - (last_buy_price * state['position']) - fee
+                    state['cumulative_realized_pnl'] += trade_pnl
+                    state['realized_pnl'].append(state['cumulative_realized_pnl'])
+                    state['cash'] += (price * state['position']) - fee
+                    state['position'] = 0
+                else:
+                    state['realized_pnl'].append(state['cumulative_realized_pnl'])
+                state['positions'].append(state['position'])
+                state['unrealized_pnl'].append(state['position'] * price)
+                state['equity'].append(state['cash'] + state['position'] * price)
+                state['cash_allocation'].append(state['cash'])
+                state['equity_allocation'].append(state['position'] * price)
+                total_equity += state['cash'] + state['position'] * price
+            # Optionally, store total_equity for portfolio curve
+            # ...
+
+        # Aggregate results
+        self.asset_states = asset_states
+        self.asset_symbols = asset_symbols
+        self.portfolio_equity_curve = [sum(asset_states[s]['equity'][i] for s in asset_symbols) for i in range(len(self.data)+1)]
+        self.returns = pd.Series(self.portfolio_equity_curve).pct_change().fillna(0)
+        logger.info(f"Backtest complete. Trades: {[len(asset_states[s]['trades']) for s in asset_symbols]}")
+        return asset_states, self.portfolio_equity_curve
