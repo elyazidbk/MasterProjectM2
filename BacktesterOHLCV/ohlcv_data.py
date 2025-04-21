@@ -19,7 +19,7 @@ class OHLCVDataLoader:
         # Filter data for the last 'years' if specified
         if years is not None:
             start_date = pd.Timestamp.now() - pd.DateOffset(years=years)
-            self.data = self.data[self.data[self.data.columns[0]] >= start_date]
+            self.data = self.data[self.data.columns[0]] >= start_date
 
         # Handle missing values and sort
         self.data = self.data.fillna(method='ffill')
@@ -59,6 +59,38 @@ class OHLCVDataLoader:
 
                     # Skip files with no valid rows
                     if data.empty:
+                        continue
+
+                    # Check for _Adjusted Close column and skip if any value is negative, or if more than 20% are zero or missing
+                    adj_close_cols = [col for col in data.columns if col.strip() == 'Adjusted Close' or col.strip() == '_Adjusted Close']
+                    if not adj_close_cols:
+                        logger.warning(f"Skipping {file_name}: No 'Adjusted Close' column found.")
+                        continue
+                    adj_close_col = adj_close_cols[0]
+                    adj_close_series = pd.to_numeric(data[adj_close_col], errors='coerce')
+                    if (adj_close_series < 0).any():
+                        logger.warning(f"Skipping {file_name}: At least one 'Adjusted Close' value is negative.")
+                        continue
+                    zero_or_nan = ((adj_close_series.fillna(0) == 0) | adj_close_series.isna()).sum()
+                    frac_zero_or_nan = zero_or_nan / len(adj_close_series)
+                    if frac_zero_or_nan > 0.2:
+                        logger.warning(f"Skipping {file_name}: More than 20% of 'Adjusted Close' values are zero or missing.")
+                        continue
+
+                    # Volume checks: skip if any negative, or if more than 10% are zero or missing
+                    volume_cols = [col for col in data.columns if col.strip() == 'Volume' or col.strip() == '_Volume']
+                    if not volume_cols:
+                        logger.warning(f"Skipping {file_name}: No 'Volume' column found.")
+                        continue
+                    volume_col = volume_cols[0]
+                    volume_series = pd.to_numeric(data[volume_col], errors='coerce')
+                    if (volume_series < 0).any():
+                        logger.warning(f"Skipping {file_name}: At least one 'Volume' value is negative.")
+                        continue
+                    zero_or_nan_vol = ((volume_series.fillna(0) == 0) | volume_series.isna()).sum()
+                    frac_zero_or_nan_vol = zero_or_nan_vol / len(volume_series)
+                    if frac_zero_or_nan_vol > 0.1:
+                        logger.warning(f"Skipping {file_name}: More than 10% of 'Volume' values are zero or missing.")
                         continue
 
                     # Set the Date column as the index

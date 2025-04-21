@@ -15,8 +15,8 @@ class OHLCVBacktester:
 
     def run(self, initial_cash=1_000_000):
         print(f"\n=== Running backtest for strategy: {getattr(self.strategy, 'name', getattr(self.strategy, 'strat', 'Unknown Strategy'))} ===")
-        # Identify asset symbols from columns (e.g., AAPL_Close, MSFT_Close)
-        asset_symbols = sorted(list(set([col.split('_')[0] for col in self.data.columns if col.endswith('_Close')])))
+        # Identify asset symbols from columns (e.g., AAPL_Adjusted Close, MSFT_Adjusted Close)
+        asset_symbols = sorted(list(set([col.split('_')[0] for col in self.data.columns if col.endswith('_Adjusted Close')])))
         n_assets = len(asset_symbols)
         cash_per_asset = initial_cash / n_assets
 
@@ -57,9 +57,10 @@ class OHLCVBacktester:
             total_equity = 0
             for symbol in asset_symbols:
                 state = asset_states[symbol]
-                # Use Adjusted Close if available, otherwise fallback to Close
-                price_col = f'{symbol}_Adj Close' if f'{symbol}_Adj Close' in self.data.columns else f'{symbol}_Close'
-                if price_col not in row or pd.isna(row[price_col]):
+
+                price_col = f'{symbol}_Adjusted Close'
+                if price_col not in row or pd.isna(row[price_col]) or row[price_col] == 0:
+                    print(f"Skipping {symbol} at index {idx}: price is zero or NaN.")
                     state['realized_pnl'].append(state['cumulative_realized_pnl'])
                     state['positions'].append(state['position'])
                     state['unrealized_pnl'].append(state['position'] * 0)

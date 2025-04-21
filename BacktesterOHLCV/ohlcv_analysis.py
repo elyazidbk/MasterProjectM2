@@ -349,8 +349,10 @@ class OHLCVAnalysis:
         roll_max = np.maximum.accumulate(equity)
         drawdown = (equity - roll_max) / roll_max
         max_drawdown = drawdown.min()
-        # Number of signals (assume 'indicators' contains signals or use trades as proxy)
-        num_signals = len(state.get('signals', [])) if 'signals' in state else len(state.get('indicators', []))
+        # Number of signals: count only those equal to 1 or -1
+        signals = state.get('signals', []) if 'signals' in state else state.get('indicators', [])
+        
+        num_signals = sum(1 for s in signals if s == 1 or s == -1)
         # Number of trades executed
         num_trades = len(state['trades'])
         strat_name = getattr(self.strategy, 'name', getattr(self.strategy, 'strat', 'Unknown Strategy')) if self.strategy else 'Unknown Strategy'
@@ -359,3 +361,4 @@ class OHLCVAnalysis:
         print(f"  Max Drawdown: {max_drawdown:.2%}")
         print(f"  Number of signals: {num_signals}")
         print(f"  Number of trades executed: {num_trades}")
+
