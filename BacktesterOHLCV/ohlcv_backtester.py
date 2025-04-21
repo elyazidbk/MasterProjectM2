@@ -14,6 +14,7 @@ class OHLCVBacktester:
         self.returns = []
 
     def run(self, initial_cash=1_000_000):
+        print(f"\n=== Running backtest for strategy: {getattr(self.strategy, 'name', getattr(self.strategy, 'strat', 'Unknown Strategy'))} ===")
         # Identify asset symbols from columns (e.g., AAPL_Close, MSFT_Close)
         asset_symbols = sorted(list(set([col.split('_')[0] for col in self.data.columns if col.endswith('_Close')])))
         n_assets = len(asset_symbols)
@@ -48,6 +49,8 @@ class OHLCVBacktester:
             sig, ind = self.strategy.generate_signals(asset_df)
             asset_signals[symbol] = sig
             asset_indicators[symbol] = ind
+            # Store indicators in asset_states for later analysis
+            asset_states[symbol]['indicators'] = ind
 
         # Main backtest loop
         for idx, (i, row) in enumerate(self.data.iterrows()):
