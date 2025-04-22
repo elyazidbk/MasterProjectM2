@@ -2,13 +2,13 @@ from ohlcv_trading_strat import OHLCVTradingStrategy
 from collections import deque
 
 class RSIStrat(OHLCVTradingStrategy):
-    def __init__(self, name, RSI_window=14, sellThreshold=70, buyThreshold=30, alpha=2):
+    def __init__(self, name, rsi_window=14, sellThreshold=70, buyThreshold=30, alpha=2):
         super().__init__(name)
-        self.RSI_window = RSI_window
+        self.rsi_window = rsi_window
         self.sellThreshold = sellThreshold
         self.buyThreshold = buyThreshold
-        self.alpha = alpha / (RSI_window+1)
-        self.prices = deque(maxlen=RSI_window)
+        self.alpha = alpha / (rsi_window+1)
+        self.prices = deque(maxlen=rsi_window)
         self.avg_gain = 0
         self.avg_loss = 0
 

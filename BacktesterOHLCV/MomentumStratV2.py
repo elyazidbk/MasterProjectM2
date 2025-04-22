@@ -3,10 +3,10 @@ from MAstrat import MAStrat
 from RSIStrat import RSIStrat
 
 class MomentumStratV2(OHLCVTradingStrategy):
-    def __init__(self, name, short_window, long_window, RSI_window=14, sellThreshold=70, buyThreshold=30, alpha=2):
+    def __init__(self, name, short_window, long_window, rsi_window=14, sellThreshold=70, buyThreshold=30, alpha=2):
         super().__init__(name)
         self.ma_strat = MAStrat(name+"_MA", short_window, long_window)
-        self.rsi_strat = RSIStrat(name+"_RSI", RSI_window, sellThreshold, buyThreshold, alpha)
+        self.rsi_strat = RSIStrat(name+"_RSI", rsi_window, sellThreshold, buyThreshold, alpha)
 
     def generate_signals(self, data):
         ma_signals, ma_indicators = self.ma_strat.generate_signals(data)
