@@ -3,107 +3,89 @@ import numpy as np
 from collections import deque
 from backtesterClass.orderClass import orders
 from backtesterClass.orderBookClass import OBData
-from backtesterClass.tradingStratClass import trading_strat
+from backtesterClass.tradingStratClass import autoTrader
 from debug import logger
+import sys
+
 
 MAX_INVENT = 5
 
-class movingAverageStrat(trading_strat):
+class movingAverageStrat(autoTrader):
 
     def __init__(self, name, short_window, long_window):
         super().__init__(name)
         self.short_window = short_window
         self.long_window = long_window
-        self.prices = deque(maxlen=self.long_window) # Store only up to `long_window` prices
-        self.short_sum = 0
-        self.long_sum = 0
-        self.historical_short_ma = []
-        self.historical_long_ma = []
 
-    def calculate_moving_averages(self):
-        new_price = OBData.mid()
-        self.prices.append(new_price)
+        self.asset_list = OBData.assets
+        asset_count = len(self.asset_list)
+        self.prices = [deque(maxlen=self.long_window) for _ in range(asset_count)] # Store only up to `long_window` prices
+        self.historical_short_ma = [[] for _ in range(asset_count)]
+        self.historical_long_ma = [[] for _ in range(asset_count)]
+        self.short_sums = np.zeros(asset_count)
+        self.long_sums = np.zeros(asset_count)
 
-        if len(self.prices) >= self.short_window:
-            if len(self.prices) == self.short_window:
-                self.short_sum += new_price - self.prices[0]
-            else:
-                self.short_sum += new_price - self.prices[-self.short_window]
+    def calculate_moving_averages(self, asset):
+        idx = OBData.assetIdx[asset]-1
+        new_price = OBData.currentPrice(asset)
+        price_queue = self.prices[idx]
+        price_queue.append(new_price)
 
-            if len(self.prices) >= self.long_window:
-
-                self.long_sum += new_price - self.prices[0] 
-
-                # Calculate the moving averages
-                short_ma = self.short_sum / self.short_window
-                long_ma = self.long_sum / self.long_window
-    
-                # Append to historical data
-                self.historical_short_ma.append(short_ma)
-                self.historical_long_ma.append(long_ma)
-
-                return short_ma, long_ma
-
-            else:
-                self.long_sum += new_price
-                self.historical_long_ma.append(None)
-                self.historical_short_ma.append(None)
-                return None, None
-            
-        else:
-            self.short_sum += new_price
-            self.long_sum += new_price
-            self.historical_long_ma.append(None)
-            self.historical_short_ma.append(None)
+        if len(price_queue) < self.short_window:
+            self.short_sums[idx] += new_price
+            self.long_sums[idx] += new_price
+            self.historical_short_ma[idx].append(None)
+            self.historical_long_ma[idx].append(None)
             return None, None
 
+        if len(price_queue) < self.long_window:
+            self.short_sums[idx] += new_price - (price_queue[-self.short_window] if len(price_queue) >= self.short_window else 0)
+            self.long_sums[idx] += new_price
+            self.historical_short_ma[idx].append(None)
+            self.historical_long_ma[idx].append(None)
+            return None, None
+
+        # Fast rolling sums for short and long window
+        self.short_sums[idx] += new_price - price_queue[-self.short_window]
+        self.long_sums[idx] += new_price - price_queue[0]
+
+        short_ma = self.short_sums[idx] / self.short_window
+        long_ma = self.long_sums[idx] / self.long_window
+
+        self.historical_short_ma[idx].append(short_ma)
+        self.historical_long_ma[idx].append(long_ma)
+
+        return short_ma, long_ma
 
         
     def strategy(self, orderClass):
-        
-        short_ma, long_ma = self.calculate_moving_averages()
 
-        
-        if short_ma is None or long_ma is None:
-            pass
-        else:
-            # Append the latest market price to the price history
-            current_price = OBData.mid() # Assuming `orderClass` provides the mid-price
-            # Ensure we have enough data to calculate moving averages
+        MAX_INVENTORY = 10000  # Example max inventory per asset
 
-            buyOrderOut = [id for id, trade in self.order_out.items() 
-                        if trade[orders.orderIndex["quantity"]] > 0]
+        for asset in self.asset_list:
+            short_ma, long_ma = self.calculate_moving_averages(asset)
+            if short_ma is None or long_ma is None:
+                continue
 
-            sellOrderOut = [id for id, trade in self.order_out.items() 
-                        if trade[orders.orderIndex["quantity"]] < 0]
-        
-            # Implement Dual Moving Average Crossover Strategy
-            if self.inventory["quantity"]+len(buyOrderOut) <= MAX_INVENT:  # Ensure no long position above 6
-                if short_ma > long_ma:  # Golden Cross (Buy Signal)
-                    price, quantity = current_price, 1  # Buy one unit at slightly higher price
-                    orderClass.send_order(self, price, quantity)
-                    self.orderID += 1
-            else:
-                buyOrderToCancel = buyOrderOut[:MAX_INVENT-(self.inventory["quantity"]+len(buyOrderOut))]
+            current_price = OBData.currentPrice(asset)
 
-                if len(buyOrderToCancel) > 0:
-                    for id in buyOrderToCancel:
-                        orderClass.cancel_order(self, id)
-            
-            if self.inventory["quantity"]-len(sellOrderOut) >= -MAX_INVENT:  # Ensure no short position below 6
-                if short_ma < long_ma:  # Death Cross (Sell Signal)
-                    price, quantity = current_price, -1  # Sell one unit at slightly lower price
-                    orderClass.send_order(self, price, quantity)
+            # If the signal is bullish, go long (buy)
+            if short_ma > long_ma:
+                if self.inventory[asset]["quantity"] < MAX_INVENTORY:
+                    quantity = 1000
+                    orderClass.send_order(self, asset, current_price, quantity)
+                    self.AUM_available -= 1000
                     self.orderID += 1
 
 
-            else:
-                sellOrderToCancel = sellOrderOut[:MAX_INVENT-(-self.inventory["quantity"]+len(sellOrderOut))]
+            # If the signal is bearish, go short (sell)
+            elif short_ma < long_ma:
+                if self.inventory[asset]["quantity"] > -MAX_INVENTORY:
+                    quantity = 1000
+                    orderClass.send_order(self, asset, current_price, -quantity)
+                    self.AUM_available += 1000
+                    self.orderID += 1
 
-                if len(sellOrderToCancel) >0:
-                    for id in sellOrderToCancel:
-                        orderClass.cancel_order(self, id)
-
-
-        # Update filled orders
+        # Process filled orders
         orderClass.filled_order(self)
+
