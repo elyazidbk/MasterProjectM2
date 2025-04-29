@@ -15,6 +15,7 @@ from strats.basicStrat import basicStrat
 from strats.movingAverageStrat import movingAverageStrat
 from strats.rsiStrat import rsiStrat
 from strats.momentumStrat import momentumStrat
+from strats.momentumOnlineLearn import momentumOnlineLearnStrat
 
 from SQLite_Manager.sqlManager import SqlAlchemyDataBaseManager
 
@@ -26,25 +27,25 @@ class analysisClass:
         self.dashboardName = dashboardName
         self.dbName = dbName
 
-        self.time = OBData.OBData_[:,OBData.OBIndex["eventTime"]]
-        self.time  = pd.to_datetime(self.time, unit='ms')
-        self.bids = OBData.OBData_[:,OBData.OBIndex["bids"]]
-        self.asks = OBData.OBData_[:,OBData.OBIndex["asks"]]
-        self.mid = (self.bids+self.asks)/2
+        self.data = pd.DataFrame(OBData.OBData_, columns = OBData.OBIndex.keys())
 
-        self.historicalTrades = pd.DataFrame(self.autoTrader.historical_trade, columns=["idx", "sendTime", "price", "quantity", "endTime", "status"])
-        self.historicalTrades["sendTime"] = pd.to_datetime(self.historicalTrades["sendTime"], unit='ms')
-        self.historicalTrades["endTime"] = pd.to_datetime(self.historicalTrades["endTime"], unit='ms')
+        self.pnl = pd.DataFrame({"Pnl":self.autoTrader.historical_pnl, "unrealPnl":self.autoTrader.historical_unrealPnL})
+        self.pnl_per_asset = pd.DataFrame(self.autoTrader.historical_unrealPnL_per_asset, columns=OBData.assets)
 
-        self.historicalInventory = pd.DataFrame({"time":self.time,"inventory":self.autoTrader.historical_inventory})
-        self.historicalPnL = pd.DataFrame({"time":self.time,"Pnl":self.autoTrader.historical_pnl})
-        self.historicalUnrealizedPnL = pd.DataFrame({"time":self.time,"unrealPnl":self.autoTrader.historical_unrealPnL})
+        self.inventory = pd.DataFrame(np.array(self.autoTrader.historical_inventory), columns=OBData.assets)
+        self.inventory["Date"] = self.data["Date"]
+        self.pnl_per_asset["Date"] = self.data["Date"]
 
-        self.df_mid = pd.DataFrame({"time":self.time, "mids":self.mid})
+        self.historicalTrades = pd.DataFrame(self.autoTrader.historical_trade, columns=["tradeIndex", "asset", "sendTime", "price","volume", "tradeTime", "Status"])
+        
+    
+    def create_dashboard(self, asset: str = False, save = True, show = False, streamlit=False):
 
-    def create_dashboard(self, save = True, show = False):
+        if asset :
+            asset_idx = OBData.assetIdx[asset]-1
+            self.dashboardName += f"_{asset}"
 
-        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
             # Intermediary dashboard to display rsi chart
             fig = make_subplots(specs=[[{"secondary_y": True}], [{}], [{}]], 
                                 rows=3, cols=1,
@@ -58,159 +59,106 @@ class analysisClass:
                     shared_xaxes=True,
                     vertical_spacing=0.02)
         
-
-        fig.update_layout(title_text=f"{self.autoTrader.strat} Execution Dashboard")
+        if asset :
+            fig.update_layout(title_text=f"{self.autoTrader.strat} Execution Dashboard {asset}")
+        else:
+            fig.update_layout(title_text=f"{self.autoTrader.strat} Execution Dashboard")
         
-
         fig.add_trace(go.Scatter(
-                            x=self.df_mid.time,
-                            y=self.df_mid.mids,
-                            name="mid price",
-                            marker=dict(color='darkgray')
-                                )
-                        ,row=1, col=1, secondary_y=False)
+                                    x=self.data.Date,
+                                    y=self.data[asset],
+                                    name=f"{asset} price",
+                                    marker=dict()
+                                        )
+                                ,row=1, col=1, secondary_y=False)
     
-        fig.add_trace(go.Scatter(
-                        x=self.historicalPnL.time,
-                        y=self.historicalPnL.Pnl,
-                        name="pnl",
-                        marker=dict(color='red')
-                            )
-                    ,row=1, col=1, secondary_y=True)
+        # fig.add_trace(go.Scatter(
+        #                 x=self.data.Date,
+        #                 y=self.pnl.Pnl,
+        #                 name="pnl",
+        #                 marker=dict(color='red')
+        #                     )
+        #             ,row=1, col=1, secondary_y=True)
 
         fig.add_trace(go.Scatter(
-                        x=self.historicalUnrealizedPnL.time,
-                        y=self.historicalUnrealizedPnL.unrealPnl,
-                        name="UnrealPnl",
+                        x=self.data.Date,
+                        y=self.pnl_per_asset[asset],
+                        name=f"Markout PnL {asset}",
                         marker=dict(color='deepskyblue')
                             )
                     ,row=1, col=1, secondary_y=True)
         
-        fig.add_trace(
-            go.Scatter(
-                x=self.historicalTrades[self.historicalTrades.quantity > 0].sendTime,  # Timestamps for buy signals
-                y=self.historicalTrades[self.historicalTrades.quantity > 0].price,  # Prices at which buy signals occurred
-                mode='markers',
-                marker=dict(color='green', size=10, symbol='triangle-up'),
-                name="Buy Sent",
-                visible='legendonly'
-            ),
-            row=1,
-            col=1
-        )
+        # Buy orders
+        fig.add_trace(go.Scatter(
+                            x=self.historicalTrades[(self.historicalTrades["volume"]>0) & (self.historicalTrades["asset"] == asset)]["tradeTime"],
+                            y=self.historicalTrades[(self.historicalTrades["volume"]>0) & (self.historicalTrades["asset"] == asset)]["price"],
+                            name=f"buy orders",
+                            mode='markers',
+                            marker=dict(color="green", size=10, symbol='triangle-up')
+                                )
+                        ,row=1, col=1, secondary_y=False)
 
-        fig.add_trace(
-            go.Scatter(
-                x=self.historicalTrades[(self.historicalTrades.quantity > 0) & (self.historicalTrades.status==1)].endTime,  # Timestamps for buy signals
-                y=self.historicalTrades[(self.historicalTrades.quantity > 0) & (self.historicalTrades.status==1)].price,  # Prices at which buy signals occurred
-                mode='markers',
-                marker=dict(color='green', size=10, symbol='triangle-up'),
-                name="Buy Filled"
-            ),
-            row=1,
-            col=1
-        )
+        # Sell orders
+        fig.add_trace(go.Scatter(
+                            x=self.historicalTrades[(self.historicalTrades["volume"]<0) & (self.historicalTrades["asset"] == asset)]["tradeTime"],
+                            y=self.historicalTrades[(self.historicalTrades["volume"]<0) & (self.historicalTrades["asset"] == asset)]["price"],
+                            name=f"sell orders",
+                            mode='markers',
+                            marker=dict(color="red", size=10, symbol='triangle-down')
+                                )
+                        ,row=1, col=1, secondary_y=False)
 
-        fig.add_trace(
-            go.Scatter(
-                x=self.historicalTrades[(self.historicalTrades.quantity > 0) & (self.historicalTrades.status==-1)].endTime,  # Timestamps for buy signals
-                y=self.historicalTrades[(self.historicalTrades.quantity > 0) & (self.historicalTrades.status==-1)].price,  # Prices at which sell signals occurred
-                mode='markers',
-                marker=dict(color='blue', size=10, symbol='triangle-up'),
-                name="Buy Cancelled",
-                visible='legendonly'
-            ),
-            row=1,
-            col=1
-        )
+        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
 
-        fig.add_trace(
-            go.Scatter(
-                x=self.historicalTrades[(self.historicalTrades.quantity < 0)].sendTime,  # Timestamps for buy signals
-                y=self.historicalTrades[(self.historicalTrades.quantity < 0)].price,  # Prices at which sell signals occurred
-                mode='markers',
-                marker=dict(color='red', size=10, symbol='triangle-down'),
-                name="Sell Sent",
-                visible='legendonly'
-            ),
-            row=1,
-            col=1
-        )
+            if OBData.assetIdx[asset] in self.max_inventory:
+                fig.add_trace(go.Scatter(
+                                    x=self.inventory.Date,
+                                    y=self.inventory[asset],
+                                    name=f"{asset}_inventory",
+                                        )
+                                ,row=3, col=1)
 
-        fig.add_trace(
-            go.Scatter(
-                x=self.historicalTrades[(self.historicalTrades.quantity < 0) & (self.historicalTrades.status==1)].endTime,  # Timestamps for buy signals
-                y=self.historicalTrades[(self.historicalTrades.quantity < 0) & (self.historicalTrades.status==1)].price,  # Prices at which sell signals occurred
-                mode='markers',
-                marker=dict(color='red', size=10, symbol='triangle-down'),
-                name="Sell Filled"
-            ),
-            row=1,
-            col=1
-        )
-
-        fig.add_trace(
-            go.Scatter(
-                x=self.historicalTrades[(self.historicalTrades.quantity < 0) & (self.historicalTrades.status==-1)].endTime,  # Timestamps for buy signals
-                y=self.historicalTrades[(self.historicalTrades.quantity < 0) & (self.historicalTrades.status==-1)].price,  # Prices at which sell signals occurred
-                mode='markers',
-                marker=dict(color='blue', size=10, symbol='triangle-down'),
-                name="Sell Cancelled",
-                visible='legendonly'
-            ),
-            row=1,
-            col=1
-        )
-
-        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
-            fig.add_trace(go.Scatter(
-                                x=self.historicalInventory.time,
-                                y=self.historicalInventory.inventory,
-                                name="inventory",
-                                marker=dict(color='darkgray')
-                                    )
-                            ,row=3, col=1)
         else:
+            # Inventory
             fig.add_trace(go.Scatter(
-                                x=self.historicalInventory.time,
-                                y=self.historicalInventory.inventory,
-                                name="inventory",
-                                marker=dict(color='darkgray')
+                                x=self.inventory.Date,
+                                y=self.inventory[asset],
+                                name=f"{asset}_inventory",
                                     )
-                            ,row=2, col=1)           
+                            ,row=2, col=1)        
 
-        if isinstance(self.autoTrader, movingAverageStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, movingAverageStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
 
             fig.add_trace(go.Scatter(
-                                x=self.time,
-                                y=self.autoTrader.historical_long_ma,
+                                x=self.data.Date,
+                                y=self.autoTrader.historical_long_ma[asset_idx],
                                 name="long_ma",
                                 marker=dict(color='brown')
                                     )
                             ,row=1, col=1, secondary_y=False)
 
             fig.add_trace(go.Scatter(
-                                x=self.time,
-                                y=self.autoTrader.historical_short_ma,
+                                x=self.data.Date,
+                                y=self.autoTrader.historical_short_ma[asset_idx],
                                 name="short_ma",
                                 marker=dict(color='seagreen')
                                     )
                             ,row=1, col=1, secondary_y=False)
             
-        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
+        if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat) or isinstance(self.autoTrader, momentumOnlineLearnStrat):
 
             fig.add_trace(go.Scatter(
-                                x=self.time,
-                                y=self.autoTrader.historical_RSI,
+                                x=self.data.Date,
+                                y=self.autoTrader.historical_RSI[asset_idx],
                                 name="rsi",
-                                marker=dict(color='seagreen')
+                                marker=dict(color='darkgray')
                                     )
                             ,row=2, col=1, secondary_y=False)
 
             fig.add_shape(
                 type="line",
-                x0=min(self.time),  # Starting x-coordinate
-                x1=max(self.time),  # Ending x-coordinate
+                x0=min(self.data.Date),  # Starting x-coordinate
+                x1=max(self.data.Date),  # Ending x-coordinate
                 y0=self.autoTrader.sellThreshold, # y-coordinate for the line
                 y1=self.autoTrader.sellThreshold,
                 line=dict(color="red", width=2, dash="dash"),
@@ -220,8 +168,8 @@ class analysisClass:
 
             fig.add_shape(
                 type="line",
-                x0=min(self.time),
-                x1=max(self.time),
+                x0=min(self.data.Date),
+                x1=max(self.data.Date),
                 y0=self.autoTrader.buyThreshold,
                 y1=self.autoTrader.buyThreshold,
                 line=dict(color="green", width=2, dash="dash"),
@@ -247,7 +195,7 @@ class analysisClass:
                     yanchor="top"  # Anchor it to the top of the legend box
                 ))
         
-        if not isinstance(self.autoTrader, rsiStrat) and not isinstance(self.autoTrader, momentumStrat):
+        if not isinstance(self.autoTrader, rsiStrat) and not isinstance(self.autoTrader, momentumStrat) and not isinstance(self.autoTrader, momentumOnlineLearnStrat) :
 
             fig.update_layout(
                 legend_orientation="h",
@@ -283,11 +231,14 @@ class analysisClass:
             else:
                 fig.write_html(f"{self.path}/{self.dashboardName}.html")
         
-        return fig
+        if streamlit:
+            return fig
+        
+        return
     
     @classmethod
     def streamlitDashboard(self, fig):
-        st.plotly_chart(fig)
+        st.plotly_chart(fig, use_container_width=True)
         return 
 
 
@@ -298,18 +249,27 @@ class analysisClass:
         else:
             db = SqlAlchemyDataBaseManager(f"{self.path}/{self.dbName}.db")
 
+        historicalInventory = self.inventory
+        historicalPnL = self.pnl["Pnl"]
+        historicalUnrealizedPnL = self.pnl["unrealPnl"]
+        df_mid = self.data
+
+        db.update("historicalPrices",df_mid)
         db.update("historicalTrades",self.historicalTrades)
-        db.update("historicalInventory",self.historicalInventory)
-        db.update("historicalPnL",self.historicalPnL)
-        db.update("historicalUnrealizedPnL",self.historicalUnrealizedPnL)
+        db.update("historicalInventory",historicalInventory)
+        db.update("historicalPnL",historicalPnL)
+        db.update("historicalUnrealizedPnL",historicalUnrealizedPnL)
 
         if isinstance(self.autoTrader, rsiStrat) or isinstance(self.autoTrader, momentumStrat):
-            self.historicalRSI = pd.DataFrame({"time":self.time,"RSI":self.autoTrader.historical_RSI})
-            db.update("historicalRSI", self.historicalRSI)
+            historicalRSI = pd.DataFrame({"Date":self.data.Date,"RSI":self.autoTrader.historical_RSI})
+            db.update("historicalRSI", historicalRSI)
         
         elif isinstance(self.autoTrader, movingAverageStrat) or isinstance(self.autoTrader, momentumStrat):
-            self.historicalMA = pd.DataFrame({"time":self.time,
-                                              "long_ma":self.autoTrader.historical_long_ma,
-                                              "short_ma":self.autoTrader.historical_short_ma})
-            
-            db.update("historicalMA", self.historicalMA)
+            historicalMA = pd.DataFrame({"Date":self.data.Date})
+
+            for asset in OBData.assets:
+                assetIdx = OBData.assetIdx[asset]-1
+                historicalMA[f"long_ma_{asset}"] = self.autoTrader.historical_long_ma[assetIdx]
+                historicalMA[f"short_ma_{asset}"] = self.autoTrader.historical_short_ma[assetIdx]
+
+            db.update("historicalMA", historicalMA)
