@@ -447,4 +447,14 @@ class OHLCVAnalysis:
         fig.add_trace(go.Scatter(x=sell_reb_x, y=sell_reb_y, mode='markers', marker=dict(color='orange', symbol='triangle-down', size=10), name='Sell (Rebalance)'))
         fig.update_layout(title=f'{symbol} Price with Trades by Type', xaxis_title='Date', yaxis_title='Price')
         fig.show()
+    def plot_asset_position(self, symbol):
+        state = self.asset_states[symbol]
+        positions = state.get('positions', [])
+        if not positions:
+            print(f"No position data for {symbol}.")
+            return
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=self.data.index[:len(positions)], y=positions, mode='lines', name='Position'))
+        fig.update_layout(title=f'{symbol} Position Over Time', xaxis_title='Date', yaxis_title='Position Size')
+        fig.show()
 

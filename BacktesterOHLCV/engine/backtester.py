@@ -41,7 +41,7 @@ class OHLCVBacktester:
         asset_signals = {}
         asset_indicators = {}
         cash_buffer = 0.05 * initial_cash
-        last_rebalance_vol = None
+        last_rebalance_vol = 0  # Initialize to 0 for baseline
         # Compute 20-day rolling volatility for each asset
         for symbol in asset_symbols:
             price_col = f'{symbol}_Adjusted Close'
@@ -50,7 +50,7 @@ class OHLCVBacktester:
                 rolling_vol = prices.rolling(window=20).std()
                 asset_states[symbol]['rolling_vol'] = rolling_vol
             else:
-                asset_states[symbol]['rolling_vol'] = pd.Series([np.nan]*len(self.data))
+                asset_states[symbol]['rolling_vol'] = pd.Series([np.nan]*len(self.data), index=self.data.index)
         for symbol in asset_symbols:
             cols = [c for c in self.data.columns if c.startswith(symbol+'_')]
             asset_df = self.data[cols].copy()
@@ -73,6 +73,12 @@ class OHLCVBacktester:
         n_rows = len(self.data)
         for idx, (i, row) in enumerate(self.data.iterrows()):
             date = row.name if self.data.index.name else idx
+            # --- Compute total portfolio value at this date ---
+            total_portfolio_value = portfolio_cash
+            for symbol in asset_symbols:
+                price_col = f'{symbol}_Adjusted Close'
+                if price_col in row and not pd.isna(row[price_col]) and row[price_col] != 0:
+                    total_portfolio_value += asset_states[symbol]['position'] * row[price_col]
             # --- Compute value-weighted average rolling_vol ---
             total_value = 0
             weighted_vol = 0
@@ -80,43 +86,55 @@ class OHLCVBacktester:
                 state = asset_states[symbol]
                 price_col = f'{symbol}_Adjusted Close'
                 if price_col in row and not pd.isna(row[price_col]) and row[price_col] != 0:
-                    vol = state['rolling_vol'].iloc[idx] if state['rolling_vol'] is not None else np.nan
+                    vol = None
+                    try:
+                        vol = state['rolling_vol'].get(date, np.nan)
+                    except Exception:
+                        vol = np.nan
                     posval = state['position'] * row[price_col]
                     if not pd.isna(vol) and vol > 0 and posval > 0:
                         total_value += posval
                         weighted_vol += posval * vol
             curr_weighted_vol = (weighted_vol / total_value) if total_value > 0 else 0
             rebalance_due_to_vol = False
-            if last_rebalance_vol is not None and last_rebalance_vol > 0:
+            if last_rebalance_vol > 0:
                 if abs(curr_weighted_vol - last_rebalance_vol) / last_rebalance_vol > 0.10:
                     rebalance_due_to_vol = True
             # --- Rebalance logic ---
             if self.rebalance_counter >= self.rebalance_frequency or rebalance_due_to_vol:
                 try:
-                    # Identify assets with positions and valid rolling_vol
                     pos_assets = [s for s in asset_symbols if asset_states[s]['position'] > 0]
                     valid_assets = []
                     inv_vols = []
                     prices = {}
+                    skip_flags = {s: False for s in pos_assets}
                     for s in pos_assets:
                         price_col = f'{s}_Adjusted Close'
                         if price_col not in row or pd.isna(row[price_col]) or row[price_col] == 0:
-                            logger.warning(f"Rebalance: Missing price for {s} on {date}, skipping.")
+                            if not skip_flags[s]:
+                                asset_states[s]['skipped_trades'] += 1
+                                skip_flags[s] = True
                             continue
-                        vol = asset_states[s]['rolling_vol'].iloc[idx] if asset_states[s]['rolling_vol'] is not None else np.nan
+                        try:
+                            vol = asset_states[s]['rolling_vol'].get(date, np.nan)
+                        except Exception:
+                            vol = np.nan
                         if pd.isna(vol) or vol == 0:
-                            logger.warning(f"Rebalance: Missing/zero rolling_vol for {s} on {date}, skipping.")
+                            if not skip_flags[s]:
+                                asset_states[s]['skipped_trades'] += 1
+                                skip_flags[s] = True
                             continue
                         valid_assets.append(s)
                         inv_vols.append(1.0/vol)
                         prices[s] = row[price_col]
                     if not valid_assets:
                         self.rebalance_counter = 0
+                        last_rebalance_vol = curr_weighted_vol  # update baseline even if no rebalance
                         continue
                     inv_vols = np.array(inv_vols)
                     norm_weights = inv_vols / inv_vols.sum()
-                    # Compute total portfolio value
-                    total_value = portfolio_cash + sum(asset_states[s]['position']*prices[s] for s in valid_assets)
+                    # Use total_portfolio_value computed above
+                    total_value = total_portfolio_value
                     for j, s in enumerate(valid_assets):
                         state = asset_states[s]
                         price = prices[s]
@@ -126,10 +144,12 @@ class OHLCVBacktester:
                         if abs(delta_value) < 0.005 * total_value:
                             continue
                         side = 'buy' if delta_value > 0 else 'sell'
-                        # Use only available cash above buffer
                         available_cash = max(0, portfolio_cash - cash_buffer)
                         qty_change = int(np.floor(abs(delta_value) / (price * (1+self.fee_perc))))
                         if qty_change < 1:
+                            if not skip_flags[s]:
+                                state['skipped_trades'] += 1
+                                skip_flags[s] = True
                             continue
                         if side == 'sell':
                             qty_change = min(qty_change, state['position'])
@@ -137,7 +157,9 @@ class OHLCVBacktester:
                         try:
                             if side == 'buy':
                                 if (qty_change * price + fee) > available_cash:
-                                    state['skipped_trades'] += 1
+                                    if not skip_flags[s]:
+                                        state['skipped_trades'] += 1
+                                        skip_flags[s] = True
                                     continue
                                 state['position'] += qty_change
                                 state['cash'] -= (qty_change * price + fee)
@@ -149,12 +171,14 @@ class OHLCVBacktester:
                             state['trades'].append(OHLCVOrder(date, price, qty_change, side, fee, None, trade_type="rebalance"))
                             state['cash_allocation'].append(state['cash'])
                         except Exception:
-                            state['skipped_trades'] += 1
+                            if not skip_flags[s]:
+                                state['skipped_trades'] += 1
+                                skip_flags[s] = True
+                    self.rebalance_counter = 0
+                    last_rebalance_vol = curr_weighted_vol  # update baseline after any rebalance
+                except Exception as e:
                     self.rebalance_counter = 0
                     last_rebalance_vol = curr_weighted_vol
-                except Exception as e:
-                    logger.warning(f"Rebalance pass failed on {date}: {e}")
-                    self.rebalance_counter = 0
             else:
                 self.rebalance_counter += 1
             # --- Signal sells ---
@@ -186,6 +210,7 @@ class OHLCVBacktester:
                     state['cash_allocation'].append(state['cash'])
             # --- Signal buys ---
             buy_candidates = []
+            buy_skip_flags = {s: False for s in asset_symbols}
             for symbol in asset_symbols:
                 state = asset_states[symbol]
                 price_col = f'{symbol}_Adjusted Close'
@@ -197,7 +222,10 @@ class OHLCVBacktester:
                 price = row[price_col]
                 signal = asset_signals[symbol][idx]
                 indicator = asset_indicators[symbol][idx]
-                vol = asset_states[symbol]['rolling_vol'].iloc[idx] if asset_states[symbol]['rolling_vol'] is not None else np.nan
+                try:
+                    vol = state['rolling_vol'].get(date, np.nan)
+                except Exception:
+                    vol = np.nan
                 if signal == 1 and state['position'] == 0 and not pd.isna(vol) and vol > 0:
                     volume_col = f'{symbol}_Volume'
                     volume = row[volume_col] if volume_col in row and not pd.isna(row[volume_col]) else 0
@@ -208,22 +236,28 @@ class OHLCVBacktester:
                 norm_weights = inv_vols / inv_vols.sum()
                 for k, (symbol, price, indicator, volume, vol) in enumerate(buy_candidates):
                     state = asset_states[symbol]
-                    # Use only available cash above buffer
                     available_cash = max(0, portfolio_cash - cash_buffer)
                     allocation = min(norm_weights[k] * available_cash, available_cash, portfolio_cash * max_daily_deploy_percent)
+                    skip_flag = False
                     if allocation < price * (1 + self.fee_perc):
-                        state['skipped_trades'] += 1
+                        if not buy_skip_flags[symbol]:
+                            state['skipped_trades'] += 1
+                            buy_skip_flags[symbol] = True
                         continue
                     max_quantity = int(np.floor(allocation / (price * (1 + self.fee_perc))))
                     max_quantity = max(max_quantity, 1)
                     max_volume = int(volume * 0.1) if volume > 0 else float('inf')
                     quantity = min(max_quantity, max_volume)
                     if quantity < 1:
-                        state['skipped_trades'] += 1
+                        if not buy_skip_flags[symbol]:
+                            state['skipped_trades'] += 1
+                            buy_skip_flags[symbol] = True
                         continue
                     total_cost = price * quantity + price * self.fee_perc * quantity
                     if total_cost > available_cash:
-                        state['skipped_trades'] += 1
+                        if not buy_skip_flags[symbol]:
+                            state['skipped_trades'] += 1
+                            buy_skip_flags[symbol] = True
                         continue
                     fee = price * self.fee_perc * quantity
                     state['trades'].append(OHLCVOrder(date, price, quantity, 'buy', fee, indicator, trade_type="signal"))
@@ -266,8 +300,8 @@ class OHLCVBacktester:
         self.portfolio_equity_curve = portfolio_equity
         self.returns = pd.Series(self.portfolio_equity_curve).pct_change().fillna(0)
         skipped_trades_dict = {s: asset_states[s]['skipped_trades'] for s in asset_symbols}
-        signal_counts = {s: len([t for t in asset_states[s]['trades'] if getattr(t, 'trade_type', 'signal') == 'signal']) for s in asset_symbols}
-        rebalance_counts = {s: len([t for t in asset_states[s]['trades'] if getattr(t, 'trade_type', 'signal') == 'rebalance']) for s in asset_symbols}
+        signal_counts = {s: len([t for t in asset_states[s]['trades'] if hasattr(t, 'trade_type') and t.trade_type == 'signal']) for s in asset_symbols}
+        rebalance_counts = {s: len([t for t in asset_states[s]['trades'] if hasattr(t, 'trade_type') and t.trade_type == 'rebalance']) for s in asset_symbols}
         logger.info(f"Non-executed trades per asset: {skipped_trades_dict}")
         logger.info(f"Backtest complete. Signal trades: {signal_counts}")
         logger.info(f"Backtest complete. Rebalance trades: {rebalance_counts}")
